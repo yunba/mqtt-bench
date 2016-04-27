@@ -74,6 +74,7 @@ Usage of mqtt-bench
   -broker="tcp://{host}:{port}"               : URI of MQTT broker (required)
   -broker-password=""                         : Password for connecting to the MQTT broker
   -broker-username=""                         : Username for connecting to the MQTT broker
+  -broker-clientid=""                         : ClientId for connecting to the MQTT broker
   -tls=""                                     : TLS mode. 'server:certFile' or 'client:rootCAFile,clientCertFile,clientKeyFile'
   -qos=0                                      : MQTT QoS(0|1|2)
   -retain=false                               : MQTT Retain
@@ -83,6 +84,7 @@ Usage of mqtt-bench
   -size=1024                                  : Message size per publish (byte)
   -pretime=3000                               : Pre wait time (ms)
   -intervaltime=0                             : Interval time per message (ms)
+  -totaltime=10                               : Total bench time (s)
   -x=false                                    : Debug mode
 ```
 

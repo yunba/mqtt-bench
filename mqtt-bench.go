@@ -6,7 +6,7 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
-	MQTT "git.eclipse.org/gitroot/paho/org.eclipse.paho.mqtt.golang.git"
+	MQTT "github.com/yunba/mqtt.go"
 	"io/ioutil"
 	"os"
 	"strconv"
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const BASE_TOPIC string = "/mqtt-bench/benchmark"
+const BASE_TOPIC string = "mqtt-bench"
 
 var Debug bool = false
 
@@ -28,6 +28,7 @@ type ExecOptions struct {
 	Qos               byte       // QoS(0|1|2)
 	Retain            bool       // Retain
 	Topic             string     // Topicのルート
+	ClientId          string     // ClientId
 	Username          string     // ユーザID
 	Password          string     // パスワード
 	CertConfig        CertConfig // 認証定義
@@ -37,6 +38,7 @@ type ExecOptions struct {
 	UseDefaultHandler bool       // Subscriber個別ではなく、デフォルトのMessageHandlerを利用するかどうか
 	PreTime           int        // 実行前の待機時間(ms)
 	IntervalTime      int        // メッセージ毎の実行間隔時間(ms)
+	TotalTime         int        // 运行总时间(s)
 }
 
 // 認証設定
@@ -100,13 +102,13 @@ func CreateClientTlsConfig(rootCAFile string, clientCertFile string, clientKeyFi
 }
 
 // 実行する。
-func Execute(exec func(clients []*MQTT.Client, opts ExecOptions, param ...string) int, opts ExecOptions) {
+func Execute(exec func(clients []*MQTT.MqttClient, opts ExecOptions, param ...string) int, opts ExecOptions) {
 	message := CreateFixedSizeMessage(opts.MessageSize)
 
 	// 配列を初期化
 	DefaultHandlerResults = make([]*SubscribeResult, opts.ClientNum)
 
-	clients := make([]*MQTT.Client, opts.ClientNum)
+	clients := make([]*MQTT.MqttClient, opts.ClientNum)
 	hasErr := false
 	for i := 0; i < opts.ClientNum; i++ {
 		client := Connect(i, opts)
@@ -145,13 +147,13 @@ func Execute(exec func(clients []*MQTT.Client, opts ExecOptions, param ...string
 	// 処理結果を出力する。
 	duration := (endTime.Sub(startTime)).Nanoseconds() / int64(1000000) // nanosecond -> millisecond
 	throughput := float64(totalCount) / float64(duration) * 1000        // messages/sec
-	fmt.Printf("\nResult : broker=%s, clients=%d, totalCount=%d, duration=%dms, throughput=%.2fmessages/sec\n",
-		opts.Broker, opts.ClientNum, totalCount, duration, throughput)
+	fmt.Printf("%s Result : broker=%s, clients=%d, totalCount=%d, duration=%dms, throughput=%.2fmessages/sec\n",
+		time.Now(), opts.Broker, opts.ClientNum, totalCount, duration, throughput)
 }
 
 // 全クライアントに対して、publishの処理を行う。
 // 送信したメッセージ数を返す（原則、クライアント数分となる）。
-func PublishAllClient(clients []*MQTT.Client, opts ExecOptions, param ...string) int {
+func PublishAllClient(clients []*MQTT.MqttClient, opts ExecOptions, param ...string) int {
 	message := param[0]
 
 	wg := new(sync.WaitGroup)
@@ -166,7 +168,7 @@ func PublishAllClient(clients []*MQTT.Client, opts ExecOptions, param ...string)
 			defer wg.Done()
 
 			for index := 0; index < opts.Count; index++ {
-				topic := fmt.Sprintf(opts.Topic+"/%d", clientId)
+				topic := opts.Topic
 
 				if Debug {
 					fmt.Printf("Publish : id=%d, count=%d, topic=%s\n", clientId, index, topic)
@@ -187,25 +189,23 @@ func PublishAllClient(clients []*MQTT.Client, opts ExecOptions, param ...string)
 }
 
 // メッセージを送信する。
-func Publish(client *MQTT.Client, topic string, qos byte, retain bool, message string) {
-	token := client.Publish(topic, qos, retain, message)
+func Publish(client *MQTT.MqttClient, topic string, qos byte, retain bool, message string) {
+	receipt := client.Publish(MQTT.QOS_ONE, topic, message)
 
-	if token.Wait() && token.Error() != nil {
-		fmt.Printf("Publish error: %s\n", token.Error())
-	}
+	<- receipt
 }
 
 // 全クライアントに対して、subscribeの処理を行う。
 // 指定されたカウント数分、メッセージを受信待ちする（メッセージが取得できない場合はカウントされない）。
 // この処理では、Publishし続けながら、Subscribeの処理を行う。
-func SubscribeAllClient(clients []*MQTT.Client, opts ExecOptions, param ...string) int {
+func SubscribeAllClient(clients []*MQTT.MqttClient, opts ExecOptions, param ...string) int {
 	wg := new(sync.WaitGroup)
 
-	results := make([]*SubscribeResult, len(clients))
-	for id := 0; id < len(clients); id++ {
+	results := make([]*SubscribeResult, opts.Count)
+	for id := 0; id < opts.Count; id++ {
 		wg.Add(1)
 
-		client := clients[id]
+		client := clients[0]
 		topic := fmt.Sprintf(opts.Topic+"/%d", id)
 
 		results[id] = Subscribe(client, topic, opts.Qos)
@@ -220,7 +220,7 @@ func SubscribeAllClient(clients []*MQTT.Client, opts ExecOptions, param ...strin
 			defer wg.Done()
 
 			var loop int = 0
-			for results[clientId].Count < opts.Count {
+			for results[clientId].Count < 0 {
 				loop++
 
 				if Debug {
@@ -259,21 +259,15 @@ type SubscribeResult struct {
 }
 
 // メッセージを受信する。
-func Subscribe(client *MQTT.Client, topic string, qos byte) *SubscribeResult {
+func Subscribe(client *MQTT.MqttClient, topic string, qos byte) *SubscribeResult {
 	var result *SubscribeResult = &SubscribeResult{}
-	result.Count = 0
+	result.Count = 1
 
-	var handler MQTT.MessageHandler = func(client *MQTT.Client, msg MQTT.Message) {
-		result.Count++
-		if Debug {
-			fmt.Printf("Received message : topic=%s, message=%s\n", msg.Topic(), msg.Payload())
-		}
-	}
-
-	token := client.Subscribe(topic, qos, handler)
-
-	if token.Wait() && token.Error() != nil {
-		fmt.Printf("Subscribe error: %s\n", token.Error())
+	filter, _ := MQTT.NewTopicFilter(topic, 0)
+	if receipt, err := client.StartSubscription(nil, filter); err != nil {
+		fmt.Printf("Subscribe error: %s\n", err)
+	} else {
+		<-receipt
 	}
 
 	return result
@@ -292,17 +286,13 @@ func CreateFixedSizeMessage(size int) string {
 
 // 指定されたBrokerへ接続し、そのMQTTクライアントを返す。
 // 接続に失敗した場合は nil を返す。
-func Connect(id int, execOpts ExecOptions) *MQTT.Client {
+func Connect(id int, execOpts ExecOptions) *MQTT.MqttClient {
 
-	// 複数プロセスで、ClientIDが重複すると、Broker側で問題となるため、
-	// プロセスIDを利用して、IDを割り振る。
-	// mqttbench<プロセスIDの16進数値>-<クライアントの連番>
-	pid := strconv.FormatInt(int64(os.Getpid()), 16)
-	clientId := fmt.Sprintf("mqttbench%s-%d", pid, id)
+	clientId := execOpts.ClientId
 
 	opts := MQTT.NewClientOptions()
 	opts.AddBroker(execOpts.Broker)
-	opts.SetClientID(clientId)
+	opts.SetClientId(clientId)
 
 	if execOpts.Username != "" {
 		opts.SetUsername(execOpts.Username)
@@ -312,17 +302,17 @@ func Connect(id int, execOpts ExecOptions) *MQTT.Client {
 	}
 
 	// TLSの設定
-	certConfig := execOpts.CertConfig
-	switch c := certConfig.(type) {
-	case ServerCertConfig:
-		tlsConfig := CreateServerTlsConfig(c.ServerCertFile)
-		opts.SetTLSConfig(tlsConfig)
-	case ClientCertConfig:
-		tlsConfig := CreateClientTlsConfig(c.RootCAFile, c.ClientCertFile, c.ClientKeyFile)
-		opts.SetTLSConfig(tlsConfig)
-	default:
-		// do nothing.
-	}
+	//certConfig := execOpts.CertConfig
+	//switch c := certConfig.(type) {
+	//case ServerCertConfig:
+	//	tlsConfig := CreateServerTlsConfig(c.ServerCertFile)
+	//	opts.SetTLSConfig(tlsConfig)
+	//case ClientCertConfig:
+	//	tlsConfig := CreateClientTlsConfig(c.RootCAFile, c.ClientCertFile, c.ClientKeyFile)
+	//	opts.SetTLSConfig(tlsConfig)
+	//default:
+	//	// do nothing.
+	//}
 
 	if execOpts.UseDefaultHandler == true {
 		// Apollo(1.7.1利用)の場合、DefaultPublishHandlerを指定しないと、Subscribeできない。
@@ -330,7 +320,7 @@ func Connect(id int, execOpts ExecOptions) *MQTT.Client {
 		var result *SubscribeResult = &SubscribeResult{}
 		result.Count = 0
 
-		var handler MQTT.MessageHandler = func(client *MQTT.Client, msg MQTT.Message) {
+		var handler MQTT.MessageHandler = func(client *MQTT.MqttClient, msg MQTT.Message) {
 			result.Count++
 			if Debug {
 				fmt.Printf("Received at defaultHandler : topic=%s, message=%s\n", msg.Topic(), msg.Payload())
@@ -342,10 +332,10 @@ func Connect(id int, execOpts ExecOptions) *MQTT.Client {
 	}
 
 	client := MQTT.NewClient(opts)
-	token := client.Connect()
+	_, err := client.Start()
 
-	if token.Wait() && token.Error() != nil {
-		fmt.Printf("Connected error: %s\n", token.Error())
+	if err != nil {
+		fmt.Printf("Connected error: %s\n", err)
 		return nil
 	}
 
@@ -353,7 +343,7 @@ func Connect(id int, execOpts ExecOptions) *MQTT.Client {
 }
 
 // 非同期でBrokerとの接続を切断する。
-func AsyncDisconnect(clients []*MQTT.Client) {
+func AsyncDisconnect(clients []*MQTT.MqttClient) {
 	wg := new(sync.WaitGroup)
 
 	for _, client := range clients {
@@ -368,7 +358,7 @@ func AsyncDisconnect(clients []*MQTT.Client) {
 }
 
 // Brokerとの接続を切断する。
-func Disconnect(client *MQTT.Client) {
+func Disconnect(client *MQTT.MqttClient) {
 	client.Disconnect(10)
 }
 
@@ -386,15 +376,17 @@ func main() {
 	qos := flag.Int("qos", 0, "MQTT QoS(0|1|2)")
 	retain := flag.Bool("retain", false, "MQTT Retain")
 	topic := flag.String("topic", BASE_TOPIC, "Base topic")
+	clientid := flag.String("broker-clientid", "", "ClientId for connecting to the MQTT broker")
 	username := flag.String("broker-username", "", "Username for connecting to the MQTT broker")
 	password := flag.String("broker-password", "", "Password for connecting to the MQTT broker")
 	tls := flag.String("tls", "", "TLS mode. 'server:certFile' or 'client:rootCAFile,clientCertFile,clientKeyFile'")
-	clients := flag.Int("clients", 10, "Number of clients")
+	//clients := flag.Int("clients", 10, "Number of clients")
 	count := flag.Int("count", 100, "Number of loops per client")
 	size := flag.Int("size", 1024, "Message size per publish (byte)")
 	useDefaultHandler := flag.Bool("support-unknown-received", false, "Using default messageHandler for a message that does not match any known subscriptions")
 	preTime := flag.Int("pretime", 3000, "Pre wait time (ms)")
 	intervalTime := flag.Int("intervaltime", 0, "Interval time per message (ms)")
+	totalTime := flag.Int("totaltime", 10, "Total bench time (s)")
 	debug := flag.Bool("x", false, "Debug mode")
 
 	flag.Parse()
@@ -469,22 +461,33 @@ func main() {
 	execOpts.Qos = byte(*qos)
 	execOpts.Retain = *retain
 	execOpts.Topic = *topic
+	execOpts.ClientId = *clientid
 	execOpts.Username = *username
 	execOpts.Password = *password
 	execOpts.CertConfig = certConfig
-	execOpts.ClientNum = *clients
+	execOpts.ClientNum = 1
 	execOpts.Count = *count
 	execOpts.MessageSize = *size
 	execOpts.UseDefaultHandler = *useDefaultHandler
 	execOpts.PreTime = *preTime
 	execOpts.IntervalTime = *intervalTime
+	execOpts.TotalTime = *totalTime
 
 	Debug = *debug
 
-	switch method {
-	case "pub":
-		Execute(PublishAllClient, execOpts)
-	case "sub":
-		Execute(SubscribeAllClient, execOpts)
+	if Debug == false {
+		MQTT.DEBUG.SetFlags(0)
+		MQTT.DEBUG.SetOutput(ioutil.Discard)
+	}
+
+	startTime := time.Now()
+
+	for int(time.Now().Sub(startTime).Seconds()) < execOpts.TotalTime {
+		switch method {
+		case "pub":
+			Execute(PublishAllClient, execOpts)
+		case "sub":
+			Execute(SubscribeAllClient, execOpts)
+		}
 	}
 }
