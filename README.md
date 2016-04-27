@@ -26,26 +26,14 @@ https://github.com/takanorig/mqtt-bench/wiki/Download
 * Precondition
  * The MQTT Broker is started.
 ```
-$ mqtt-bench -broker=tcp://192.168.1.100:1883 -action=pub
-2015-04-04 12:47:38.690896 +0900 JST Start benchmark
-2015-04-04 12:47:38.765896 +0900 JST End benchmark
-
-Result : broker=tcp://192.168.1.100:1883, clients=10, totalCount=1000, duration=72ms, throughput=13888.89messages/sec
+$ mqtt-bench -action pub -broker tcp://127.0.0.1:1883 -broker-username 2674041399339990144 -broker-password 28f052900f5d8 -broker-clientid 0000000004-000000005795 -totaltime 20
 ```
 
 ### Subscribe
 * Precondition
  * The MQTT Broker is started.
- * Publishing to MQTT Broker.
 ```
-(Publish the messages while subscribing)
-$ mqtt-bench -broker=tcp://192.168.1.100:1883 -action=pub -count=10000
-
-$ mqtt-bench -broker=tcp://192.168.1.100:1883 -action=sub
-2015-04-04 12:50:27.188396 +0900 JST Start benchmark
-2015-04-04 12:50:27.477896 +0900 JST End benchmark
-
-Result : broker=tcp://192.168.1.100:1883, clients=10, totalCount=1000, duration=287ms, throughput=3484.32messages/sec
+$ mqtt-bench -action sub -broker tcp://127.0.0.1:1883 -broker-username 2674041399339990144 -broker-password 28f052900f5d8 -broker-clientid 0000000004-000000005795 -totaltime 20
 ```
 
 If the following message is output to the console, the count is over limit.
