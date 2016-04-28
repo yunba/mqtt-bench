@@ -74,6 +74,7 @@ Usage of mqtt-bench
   -intervaltime=0                             : Interval time per message (ms)
   -totaltime=10                               : Total bench time (s)
   -x=false                                    : Debug mode
+  -influxdb                                   : stat influxdb address (host:port)
 ```
 
 ## Note

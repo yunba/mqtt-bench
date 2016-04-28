@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	INFLUX "github.com/influxdata/influxdb/client/v2"
 )
 
 const BASE_TOPIC string = "mqtt-bench"
@@ -39,6 +40,7 @@ type ExecOptions struct {
 	PreTime           int        // 実行前の待機時間(ms)
 	IntervalTime      int        // メッセージ毎の実行間隔時間(ms)
 	TotalTime         int        // 运行总时间(s)
+	InfluxClient      INFLUX.Client   // InfluxDB 客户端
 }
 
 // 認証設定
@@ -131,7 +133,7 @@ func Execute(exec func(clients []*MQTT.MqttClient, opts ExecOptions, param ...st
 	}
 
 	// 安定させるために、一定時間待機する。
-	time.Sleep(time.Duration(opts.PreTime) * time.Millisecond)
+	// time.Sleep(time.Duration(opts.PreTime) * time.Millisecond)
 
 	fmt.Printf("%s Start benchmark\n", time.Now())
 
@@ -147,8 +149,31 @@ func Execute(exec func(clients []*MQTT.MqttClient, opts ExecOptions, param ...st
 	// 処理結果を出力する。
 	duration := (endTime.Sub(startTime)).Nanoseconds() / int64(1000000) // nanosecond -> millisecond
 	throughput := float64(totalCount) / float64(duration) * 1000        // messages/sec
+
 	fmt.Printf("%s Result : broker=%s, clients=%d, totalCount=%d, duration=%dms, throughput=%.2fmessages/sec\n",
 		time.Now(), opts.Broker, opts.ClientNum, totalCount, duration, throughput)
+
+	if (opts.InfluxClient != nil) {
+		// Create a new point batch
+		bp, _ := INFLUX.NewBatchPoints(INFLUX.BatchPointsConfig{
+			Precision: "s",
+		})
+
+		// Create a point and add to batch
+		tags := map[string]string{"host": "test"}
+		fields := map[string]interface{}{
+			"ops":   int(throughput),
+		}
+		pt, err := INFLUX.NewPoint("mqtt_bench", tags, fields, time.Now())
+		if err != nil {
+			fmt.Printf("influxdb write failed %s\n", err.Error())
+			return
+		}
+		bp.AddPoint(pt)
+
+		// Write the batch
+		opts.InfluxClient.Write(bp)
+	}
 }
 
 // 全クライアントに対して、publishの処理を行う。
@@ -208,36 +233,21 @@ func SubscribeAllClient(clients []*MQTT.MqttClient, opts ExecOptions, param ...s
 		client := clients[0]
 		topic := fmt.Sprintf(opts.Topic+"/%d", id)
 
-		results[id] = Subscribe(client, topic, opts.Qos)
-
-		// DefaultHandlerを利用する場合は、Subscribe個別のHandlerではなく、
-		// DefaultHandlerの処理結果を参照する。
-		if opts.UseDefaultHandler == true {
-			results[id] = DefaultHandlerResults[id]
-		}
+		receipt, result := Subscribe(client, topic, opts.Qos)
+		results[id] = result
 
 		go func(clientId int) {
 			defer wg.Done()
 
-			var loop int = 0
-			for results[clientId].Count < 0 {
-				loop++
-
-				if Debug {
-					fmt.Printf("Subscribe : id=%d, count=%d, topic=%s\n", clientId, results[clientId].Count, topic)
-				}
-
-				if opts.IntervalTime > 0 {
-					time.Sleep(time.Duration(opts.IntervalTime) * time.Millisecond)
-				} else {
-					// for文による負荷を下げるため、最低でも1000ナノ秒（0.001ミリ秒）は待機する。
-					time.Sleep(1000 * time.Nanosecond)
-				}
-
-				// 無限ループを避けるため、指定されたCountの100倍に達したら、エラーで終了する。
-				if loop >= opts.Count*100 {
-					panic("Subscribe error : Not finished in the max count. It may not be received the message.")
-				}
+			timeout := make (chan bool, 1)
+			go func() {
+				time.Sleep(10 * time.Second)
+				timeout <- true
+			}()
+			select {
+			case <-receipt:
+			case <-timeout:
+				fmt.Println("sub timeout!")
 			}
 		}(id)
 	}
@@ -256,21 +266,21 @@ func SubscribeAllClient(clients []*MQTT.MqttClient, opts ExecOptions, param ...s
 // Subscribeの処理結果
 type SubscribeResult struct {
 	Count int // 受信メッセージ数
+	receipt <-chan MQTT.Receipt   // sub 结果
 }
 
 // メッセージを受信する。
-func Subscribe(client *MQTT.MqttClient, topic string, qos byte) *SubscribeResult {
+func Subscribe(client *MQTT.MqttClient, topic string, qos byte) (<-chan MQTT.Receipt, *SubscribeResult) {
 	var result *SubscribeResult = &SubscribeResult{}
 	result.Count = 1
 
 	filter, _ := MQTT.NewTopicFilter(topic, 0)
-	if receipt, err := client.StartSubscription(nil, filter); err != nil {
+	receipt, err := client.StartSubscription(nil, filter)
+	if err != nil {
 		fmt.Printf("Subscribe error: %s\n", err)
-	} else {
-		<-receipt
 	}
 
-	return result
+	return receipt, result
 }
 
 // 固定サイズのメッセージを生成する。
@@ -379,6 +389,7 @@ func main() {
 	clientid := flag.String("broker-clientid", "", "ClientId for connecting to the MQTT broker")
 	username := flag.String("broker-username", "", "Username for connecting to the MQTT broker")
 	password := flag.String("broker-password", "", "Password for connecting to the MQTT broker")
+	influxdb := flag.String("influxdb", "", "InfluxDB UDP Address")
 	tls := flag.String("tls", "", "TLS mode. 'server:certFile' or 'client:rootCAFile,clientCertFile,clientKeyFile'")
 	//clients := flag.Int("clients", 10, "Number of clients")
 	count := flag.Int("count", 100, "Number of loops per client")
@@ -481,6 +492,19 @@ func main() {
 	}
 
 	startTime := time.Now()
+
+	if influxdb != nil && *influxdb != "" {
+		influxClient, err := INFLUX.NewUDPClient(INFLUX.UDPConfig{
+			Addr: *influxdb,
+		})
+
+		if err != nil {
+			fmt.Printf("open influxdb failed: %s\n", err)
+			return
+		}
+
+		execOpts.InfluxClient = influxClient
+	}
 
 	for int(time.Now().Sub(startTime).Seconds()) < execOpts.TotalTime {
 		switch method {
