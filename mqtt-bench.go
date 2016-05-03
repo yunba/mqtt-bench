@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"encoding/json"
+	"math/rand"
 	INFLUX "github.com/influxdata/influxdb/client/v2"
 )
 
@@ -23,15 +25,25 @@ var Debug bool = false
 // Apollo用に、Subscribe時のDefaultHandlerの処理結果を保持できるようにする。
 var DefaultHandlerResults []*SubscribeResult
 
+// 登录认证信息
+type ClientInfo struct {
+	ClientId          string     // ClientId
+	Username          string     // ユーザID
+	Password          string     // パスワード
+}
+
+type ClientList []ClientInfo
+
 // 実行オプション
 type ExecOptions struct {
 	Broker            string     // Broker URI
 	Qos               byte       // QoS(0|1|2)
 	Retain            bool       // Retain
 	Topic             string     // Topicのルート
-	ClientId          string     // ClientId
-	Username          string     // ユーザID
-	Password          string     // パスワード
+	//ClientId          string     // ClientId
+	//Username          string     // ユーザID
+	//Password          string     // パスワード
+	Clients           ClientList // 登录认证信息列表
 	CertConfig        CertConfig // 認証定義
 	ClientNum         int        // クライアントの同時実行数
 	Count             int        // 1クライアント当たりのメッセージ数
@@ -107,10 +119,13 @@ func CreateClientTlsConfig(rootCAFile string, clientCertFile string, clientKeyFi
 func Execute(exec func(clients []*MQTT.MqttClient, opts ExecOptions, param ...string) int, opts ExecOptions) {
 	message := CreateFixedSizeMessage(opts.MessageSize)
 
+	fmt.Printf("%s Start benchmark\n", time.Now())
+	startTime := time.Now()
+
 	// 配列を初期化
 	DefaultHandlerResults = make([]*SubscribeResult, opts.ClientNum)
 
-	clients := make([]*MQTT.MqttClient, opts.ClientNum)
+	clients := make([]*MQTT.MqttClient, len(opts.Clients))
 	hasErr := false
 	for i := 0; i < opts.ClientNum; i++ {
 		client := Connect(i, opts)
@@ -135,12 +150,9 @@ func Execute(exec func(clients []*MQTT.MqttClient, opts ExecOptions, param ...st
 	// 安定させるために、一定時間待機する。
 	// time.Sleep(time.Duration(opts.PreTime) * time.Millisecond)
 
-	fmt.Printf("%s Start benchmark\n", time.Now())
-
-	startTime := time.Now()
 	totalCount := exec(clients, opts, message)
-	endTime := time.Now()
 
+	endTime := time.Now()
 	fmt.Printf("%s End benchmark\n", time.Now())
 
 	// 切断に時間がかかるため、非同期で処理を行う。
@@ -230,7 +242,7 @@ func SubscribeAllClient(clients []*MQTT.MqttClient, opts ExecOptions, param ...s
 	for id := 0; id < opts.Count; id++ {
 		wg.Add(1)
 
-		client := clients[0]
+		client := clients[rand.Intn(len(clients))]
 		topic := fmt.Sprintf(opts.Topic+"/%d", id)
 
 		receipt, result := Subscribe(client, topic, opts.Qos)
@@ -298,17 +310,17 @@ func CreateFixedSizeMessage(size int) string {
 // 接続に失敗した場合は nil を返す。
 func Connect(id int, execOpts ExecOptions) *MQTT.MqttClient {
 
-	clientId := execOpts.ClientId
+	clientId := execOpts.Clients[id].ClientId
 
 	opts := MQTT.NewClientOptions()
 	opts.AddBroker(execOpts.Broker)
 	opts.SetClientId(clientId)
 
-	if execOpts.Username != "" {
-		opts.SetUsername(execOpts.Username)
+	if execOpts.Clients[id].Username != "" {
+		opts.SetUsername(execOpts.Clients[id].Username)
 	}
-	if execOpts.Password != "" {
-		opts.SetPassword(execOpts.Password)
+	if execOpts.Clients[id].Password != "" {
+		opts.SetPassword(execOpts.Clients[id].Password)
 	}
 
 	// TLSの設定
@@ -386,9 +398,9 @@ func main() {
 	qos := flag.Int("qos", 0, "MQTT QoS(0|1|2)")
 	retain := flag.Bool("retain", false, "MQTT Retain")
 	topic := flag.String("topic", BASE_TOPIC, "Base topic")
-	clientid := flag.String("broker-clientid", "", "ClientId for connecting to the MQTT broker")
-	username := flag.String("broker-username", "", "Username for connecting to the MQTT broker")
-	password := flag.String("broker-password", "", "Password for connecting to the MQTT broker")
+	//clientid := flag.String("broker-clientid", "", "ClientId for connecting to the MQTT broker")
+	//username := flag.String("broker-username", "", "Username for connecting to the MQTT broker")
+	//password := flag.String("broker-password", "", "Password for connecting to the MQTT broker")
 	influxdb := flag.String("influxdb", "", "InfluxDB UDP Address")
 	tls := flag.String("tls", "", "TLS mode. 'server:certFile' or 'client:rootCAFile,clientCertFile,clientKeyFile'")
 	//clients := flag.Int("clients", 10, "Number of clients")
@@ -399,6 +411,7 @@ func main() {
 	intervalTime := flag.Int("intervaltime", 0, "Interval time per message (ms)")
 	totalTime := flag.Int("totaltime", 10, "Total bench time (s)")
 	debug := flag.Bool("x", false, "Debug mode")
+	clientFile := flag.String("client-file", "", "Client Info File for connecting to the MQTT broker")
 
 	flag.Parse()
 
@@ -472,11 +485,11 @@ func main() {
 	execOpts.Qos = byte(*qos)
 	execOpts.Retain = *retain
 	execOpts.Topic = *topic
-	execOpts.ClientId = *clientid
-	execOpts.Username = *username
-	execOpts.Password = *password
+	//execOpts.ClientId = *clientid
+	//execOpts.Username = *username
+	//execOpts.Password = *password
 	execOpts.CertConfig = certConfig
-	execOpts.ClientNum = 1
+	//execOpts.ClientNum = 1
 	execOpts.Count = *count
 	execOpts.MessageSize = *size
 	execOpts.UseDefaultHandler = *useDefaultHandler
@@ -491,6 +504,7 @@ func main() {
 		MQTT.DEBUG.SetOutput(ioutil.Discard)
 	}
 
+	rand.Seed(time.Now().UnixNano())
 	startTime := time.Now()
 
 	if influxdb != nil && *influxdb != "" {
@@ -505,6 +519,20 @@ func main() {
 
 		execOpts.InfluxClient = influxClient
 	}
+
+	configFile, err := os.Open(*clientFile)
+	if err != nil {
+		fmt.Printf("open client file failed: %s\n", err.Error())
+		return
+	}
+
+	jsonParser := json.NewDecoder(configFile)
+	if err = jsonParser.Decode(&execOpts.Clients); err != nil {
+		fmt.Printf("parsing client file failed: %s\n", err.Error())
+		return
+	}
+
+	execOpts.ClientNum = len(execOpts.Clients)
 
 	for int(time.Now().Sub(startTime).Seconds()) < execOpts.TotalTime {
 		switch method {

@@ -26,14 +26,14 @@ https://github.com/takanorig/mqtt-bench/wiki/Download
 * Precondition
  * The MQTT Broker is started.
 ```
-$ mqtt-bench -action pub -broker tcp://127.0.0.1:1883 -broker-username 2674041399339990144 -broker-password 28f052900f5d8 -broker-clientid 0000000004-000000005795 -totaltime 20
+$ mqtt-bench -action pub -broker tcp://127.0.0.1:1883 -client-file clients.json -totaltime 20
 ```
 
 ### Subscribe
 * Precondition
  * The MQTT Broker is started.
 ```
-$ mqtt-bench -action sub -broker tcp://127.0.0.1:1883 -broker-username 2674041399339990144 -broker-password 28f052900f5d8 -broker-clientid 0000000004-000000005795 -totaltime 20
+$ mqtt-bench -action sub -broker tcp://127.0.0.1:1883 -client-file clients.json -totaltime 20
 ```
 
 If the following message is output to the console, the count is over limit.
@@ -60,9 +60,7 @@ Use ```-tls``` option.
 Usage of mqtt-bench
   -action="p|pub or s|sub"                    : Publish or Subscribe (required)
   -broker="tcp://{host}:{port}"               : URI of MQTT broker (required)
-  -broker-password=""                         : Password for connecting to the MQTT broker
-  -broker-username=""                         : Username for connecting to the MQTT broker
-  -broker-clientid=""                         : ClientId for connecting to the MQTT broker
+  -client-file=""                             : Client Info File for connecting to the MQTT broker
   -tls=""                                     : TLS mode. 'server:certFile' or 'client:rootCAFile,clientCertFile,clientKeyFile'
   -qos=0                                      : MQTT QoS(0|1|2)
   -retain=false                               : MQTT Retain
