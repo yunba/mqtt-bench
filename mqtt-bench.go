@@ -366,17 +366,9 @@ func Connect(id int, execOpts ExecOptions) *MQTT.MqttClient {
 
 // 非同期でBrokerとの接続を切断する。
 func AsyncDisconnect(clients []*MQTT.MqttClient) {
-	wg := new(sync.WaitGroup)
-
 	for _, client := range clients {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			Disconnect(client)
-		}()
+		Disconnect(client)
 	}
-
-	wg.Wait()
 }
 
 // Brokerとの接続を切断する。
