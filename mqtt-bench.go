@@ -494,6 +494,8 @@ func main() {
 	if Debug == false {
 		MQTT.DEBUG.SetFlags(0)
 		MQTT.DEBUG.SetOutput(ioutil.Discard)
+		MQTT.WARN.SetFlags(0)
+		MQTT.WARN.SetOutput(ioutil.Discard)
 	}
 
 	rand.Seed(time.Now().UnixNano())
