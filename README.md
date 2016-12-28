@@ -12,15 +12,9 @@ Supported benchmark pattern is:
 Use ```go get``` and ```go install```
 
 ```
-$ go get github.com/takanorig/mqtt-bench
-$ go install github.com/takanorig/mqtt-bench
+$ go get github.com/yunba/mqtt-bench
+$ go install github.com/yunba/mqtt-bench
 ```
-
-or 
-
-Download here
-
-https://github.com/takanorig/mqtt-bench/wiki/Download
 
 ### Publish
 * Precondition
